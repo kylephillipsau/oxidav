@@ -1,73 +1,217 @@
-// Importing necessary modules from Rust Libraries
-use std::fs::File;
+use std::collections::HashMap;
+use std::env;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use dotenv::dotenv;
 
+
+// Function to create and return a HashMap containing content types based on file extensions
+fn get_content_type_map() -> HashMap<&'static str, &'static str> {
+    let mut map = HashMap::new();
+    map.insert("html", "text/html");
+    map.insert("css", "text/css");
+    map.insert("js", "application/javascript");
+    map.insert("json", "application/json");
+    map.insert("png", "image/png");
+    map.insert("jpeg", "image/jpeg");
+    map.insert("jpg", "image/jpeg");
+    map.insert("gif", "image/gif");
+    map.insert("svg", "image/svg+xml");
+    map.insert("ico", "image/x-icon");
+    map.insert("txt", "text/plain");
+    map.insert("pdf", "application/pdf");
+    map.insert("zip", "application/zip");
+    map
+}
+
+// Function to handle an incoming client connection
 fn handle_client(mut stream: TcpStream) {
-    // This is a buffer to read data from the client
+    // Buffer to read data from the client
     let mut buffer = [0; 1024];
-    // This line reads data from the stream and stores it in the buffer
+    // Read data into the buffer
     stream
         .read(&mut buffer)
         .expect("Failed to read from client!");
-    // This line converts the data in the buffer into a UTF-8 encoded string
+    // Convert the buffer data into a UTF-8 string
     let request = String::from_utf8_lossy(&buffer[..]);
 
-    // Extract the required path from the HTTP request
+    // Extract the request line (the first line of the HTTP request)
     let request_line = request.lines().next().unwrap_or("");
-    let requested_path = request_line.split_whitespace().nth(1).unwrap_or("/");
+    // Split the request line into parts to get the method and path
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let requested_path = parts.next().unwrap_or("/");
 
-    // Set the root directory for your server files
+    // Extract the authorization header from the request
+    let auth_header = request
+        .lines()
+        .find(|line| line.to_lowercase().starts_with("authorization:"))
+        .unwrap_or("");
+
+    // Check if the method requires authentication
+    if ["POST", "PUT", "DELETE"].contains(&method) {
+        if !is_authorized(auth_header) {
+            let response = "HTTP/1.1 401 Unauthorized\r\n\r\nUnauthorized";
+            stream
+                .write(response.as_bytes())
+                .expect("Failed to write 401 response");
+            return;
+        }
+    }
+
+    // Set the root directory for server files
     let root_dir = "public";
-
-    // Construct the path to the required file
+    // Construct the file path based on the requested path
     let path = if requested_path == "/" {
         format!("{}/index.html", root_dir)
     } else {
         format!("{}{}", root_dir, requested_path)
     };
 
-    // Check if the file exists and is not a directory.
-    if Path::new(&path).is_file() {
-        // Read the file contents
-        let mut file = File::open(&path).expect("Failed to open file");
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)
-            .expect("Failed to read file");
+    // Get the content type map
+    let content_type_map = get_content_type_map();
+    // Get the file extension and look up the content type
+    let ext = Path::new(&path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("txt");
+    let content_type = content_type_map
+        .get(ext)
+        .unwrap_or(&"application/octet-stream");
 
-        // Determine the content type based on the file extension
-        let content_type = match Path::new(&path).extension().and_then(|ext| ext.to_str()) {
-            Some("html") => "text/html",
-            Some("png") => "image/png",
-            Some("jpeg") => "image/jpeg",
-            _ => "text/plain",
-        };
+    // Handle the HTTP Methods
+    match method {
+        "GET" => {
+            // Check if the file exists and is a file (not a directory)
+            if Path::new(&path).is_file() {
+                // Open and read the file
+                let mut file = File::open(&path).expect("Failed to open file");
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents)
+                    .expect("Failed to read file");
 
-        // Construct the HTTP response with the appropriate content type.
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {}; charset=UTF-8\r\n\r\n",
-            content_type
-        );
+                // Construct the HTTP response with the appropriate content type
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {}; charset=UTF-8\r\n\r\n",
+                    content_type
+                );
 
-        // Send the response back to the client
-        stream
-            .write(response.as_bytes())
-            .expect("Failed to write response header");
-        stream
-            .write(&contents)
-            .expect("Failed to write response body");
-    } else {
-        // If the file does not exist, return a 404 Not Found response.
-        let response = "HTTP/1.1 404 Not Found\r\n\r\n";
-        stream.write(response.as_bytes()).expect("Failed to write 404 response");
+                // Send the response headers and body to the client
+                stream
+                    .write(response.as_bytes())
+                    .expect("Failed to write response header");
+                stream
+                    .write(&contents)
+                    .expect("Failed to write response body");
+            } else {
+                // If the file does not exist, return a 404 Not Found response
+                let response = "HTTP/1.1 404 Not Found\r\n\r\n";
+                stream
+                    .write(response.as_bytes())
+                    .expect("Failed to write 404 response");
+            }
+        }
+        "POST" => {
+            // Get the content length from the request headers
+            let content_length = get_content_length(&request);
+            // Read the request body
+            let body = read_body(&mut stream, content_length);
+
+            // Save the body to a file for demonstration
+            let mut file = File::create(&path).expect("Failed to create file");
+            file.write_all(&body).expect("Failed to write to file");
+
+            // Send a response indicating that the data was received and saved
+            let response = "HTTP/1.1 201 Created\r\n\r\nPOST request received and data saved";
+            stream
+                .write(response.as_bytes())
+                .expect("Failed to write POST response");
+        }
+        "PUT" => {
+            // Get the content length from the request headers
+            let content_length = get_content_length(&request);
+            // Read the request body
+            let body = read_body(&mut stream, content_length);
+
+            // Open the file in append mode and write the data to it
+            let mut file = OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open(&path)
+                .expect("Failed to open file");
+            file.write_all(&body).expect("Failed to write to file");
+
+            // Send a response indicating that the data was received and appended
+            let response = "HTTP/1.1 200 OK\r\n\r\nPUT request received and data updated";
+            stream
+                .write(response.as_bytes())
+                .expect("Failed to write PUT response");
+        }
+        "DELETE" => {
+            // Check if the file exists and is a file
+            if Path::new(&path).is_file() {
+                // Delete the file
+                std::fs::remove_file(&path).expect("Failed to delete file");
+
+                // Send a response indicating that the file was deleted
+                let response = "HTTP/1.1 200 OK\r\n\r\nDELETE request received and file deleted";
+                stream
+                    .write(response.as_bytes())
+                    .expect("Failed to write DELETE response");
+            } else {
+                // If the file does not exist, return a 404 Not Found response
+                let response = "HTTP/1.1 404 Not Found\r\n\r\n";
+                stream
+                    .write(response.as_bytes())
+                    .expect("Failed to write 404 response");
+            }
+        }
+        _ => {
+            let response = "HTTP/1.1 405 Method Not Allowed\r\n\r\n";
+            stream
+                .write(response.as_bytes())
+                .expect("Failed to write 405 response");
+        }
     }
+}
+
+// Function to check if the request is authorized
+fn is_authorized(auth_header: &str) -> bool {
+    // Load environment variables from the .env file
+    dotenv().ok();
+    // Get the secret token from the environment variables
+    let secret_token = env::var("SECRET_TOKEN").expect("SECRET_TOKEN not set in .env file");
+    // Check if the authorization header matches the secret token
+    auth_header == format!("Authorization: Bearer {}", secret_token)
+}
+
+// Function to get the content length from the request headers
+fn get_content_length(request: &str) -> usize {
+    for line in request.lines() {
+        if line.to_lowercase().starts_with("content-length:") {
+            if let Some(length) = line.split_whitespace().nth(1) {
+                if let Ok(length) = length.parse::<usize>() {
+                    return length;
+                }
+            }
+        }
+    }
+    0
+}
+
+// Function to read the request body from the stream
+fn read_body(stream: &mut TcpStream, content_length: usize) -> Vec<u8> {
+    let mut body = vec![0; content_length];
+    stream.read_exact(&mut body).expect("Failed to read body");
+    body
 }
 
 fn main() {
     // Bind the server to the specific address and port
     let listener = TcpListener::bind("127.0.0.1:8080").expect("Failed to bind to address");
-    println!("Server listening on 127.0.0.1:8080");
+    println!("Server listening on http://127.0.0.1:8080");
 
     // Listen for incoming connections
     for stream in listener.incoming() {
