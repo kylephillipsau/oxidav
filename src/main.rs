@@ -7,11 +7,12 @@ use std::path::Path;
 use dotenv::dotenv;
 
 
-// Function to create and return a HashMap containing content types based on file extensions
+// Function to create and return a HashMap containing content MIME types based on file extensions
 fn get_content_type_map() -> HashMap<&'static str, &'static str> {
     let mut map = HashMap::new();
     map.insert("html", "text/html");
     map.insert("css", "text/css");
+    map.insert("ics", "text/calendar");
     map.insert("js", "application/javascript");
     map.insert("json", "application/json");
     map.insert("png", "image/png");
@@ -23,7 +24,11 @@ fn get_content_type_map() -> HashMap<&'static str, &'static str> {
     map.insert("txt", "text/plain");
     map.insert("pdf", "application/pdf");
     map.insert("zip", "application/zip");
-    map
+    map.insert("xml", "application/xml");
+    map.insert("vcard", "text/vcard");
+    map.insert("vcf", "text/vcard");
+    map.insert("vcard+json", "application/vcard+json");
+    map.insert("vcard+xml", "application/vcard+xml");
 }
 
 // Function to handle an incoming client connection
