@@ -166,7 +166,7 @@ fn is_authorized(auth_header: &str) -> Result<bool> {
     // Load environment variables from the .env file
     dotenv().ok();
     // Get the secret token from the environment variables
-    let secret_token = env::var("SECRET_TOKEN")?;
+    let secret_token = env::var("SECRET_TOKEN").map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "SECRET_TOKEN not set"))?;
     // Check if the authorization header matches the secret token
     Ok(auth_header == format!("Authorization: Bearer {}", secret_token))
 }
